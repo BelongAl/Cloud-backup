@@ -12,9 +12,16 @@
 
 #include"httplib.h"//http
 
+#define NONHOT_TIME 10 //最后一次访问时间在10s以内的
+#define INTERVAL_TIME 30 //非热店文件检测，每30s一次
+#define BACKUP_DIR "./backup/" //文件备份目录
+#define GZFILE_DIR "./gzfile/" //压缩后的文件目录
+#define DATA_FILE "./list.backup" //数据管理模块备份路径
 
 namespace m_cloud_sys
 {
+
+
 	class FileUtil//文件操作模块
 	{
 	public:
@@ -120,11 +127,12 @@ namespace m_cloud_sys
 	class DataManger//数据管理模块
 	{
 	public:
-		DataManger(const std::string &path):
+		DataManger(const std::string  &path):
 			m_back_file(path)
 		{
 			pthread_rwlock_init(&m_rwlock, NULL);
 		}
+
 		~DataManger()
 		{
 			pthread_rwlock_destroy(&m_rwlock);
@@ -179,6 +187,7 @@ namespace m_cloud_sys
 			pthread_rwlock_wrlock(&m_rwlock);//加写锁子
 			m_file_list[src] = dst;
 			pthread_rwlock_unlock(&m_rwlock);
+			Storage();//保存
 			return true;
 		}
 
@@ -238,21 +247,67 @@ namespace m_cloud_sys
 		pthread_rwlock_t m_rwlock;//读写锁
 	};
 
+
+	DataManger data_manger(DATA_FILE);//数据管理对象
+
 	class NonHotCompress
 	{
 	public:
-		NonHotCompress()
-		{}
-		~NonHotCompress()
+		NonHotCompress(const std::string dir_name, const std::string src_name):
+			m_gz_dir(dir_name),
+			m_src_name(src_name)
 		{}
 			
-		bool Start();//总体向外提供的功能接口，开始压缩模块
+		bool Start()//总体向外提供的功能接口，开始压缩模块
+		{
+			//一个一直循环操作，对文件进行判断，压缩
+			while(true)
+			{
+				//1：获取未压缩文件列表
+				std::vector<std::string> list;
+				data_manger.NonCompressList(&list);
+				//2：判断是否为热点文件
+				for(auto e: list)
+				{
+					//3：是否为非热点就压缩
+					bool ret = FileIsHot(e);
+					if(!ret)
+					{
+						std::cout << "---压缩文件： " << e.c_str() <<  "---" << std::endl;
+						std::string src_name = BACKUP_DIR + e;//源文件名称
+						std::string dst_name = GZFILE_DIR + e + ".gz";//压缩文件名称
+						if(CompressUtil::Compress(src_name, dst_name))
+						{
+							data_manger.Insert(e, e+".gz");//更新数据信息
+							unlink(src_name.c_str());//删除源文件(删除文件目录项)
+						}
+					}
+				}
+				//4：休眠
+				sleep(INTERVAL_TIME);
+			} 
+			return true;
+		}
+	
 	private:
-		bool FileIsHot(const std::string &name);//判断一个文件是否是一个热点文件	
+		bool FileIsHot(const std::string &name)//判断一个文件是否是一个热点文件
+		{
+			time_t cur_t = time(NULL);//获取当前时间
+			struct stat st;//文件信息结构体
+			if(stat(name.c_str(), &st) < 0)//文件状态获取失败
+			{	
+				return false;
+			}
+			if((cur_t - st.st_atime) > NONHOT_TIME)
+			{
+				return false;//非热点文件
+			}
+			return true;//热点文件
+		}
 
 	private:
 		std::string m_gz_dir;//压缩文件存储路径
-
+		std::string m_src_name;//原文件路径
 	};
 
 	class Server
