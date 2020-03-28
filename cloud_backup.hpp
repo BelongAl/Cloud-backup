@@ -7,6 +7,8 @@
 #include<pthread.h>
 #include<iostream>
 #include<boost/filesystem.hpp>
+#include<boost/algorithm/string.hpp>
+#include<unistd.h>
 
 #include"httplib.h"//http
 
@@ -37,7 +39,7 @@ namespace m_cloud_sys
 			return true;
 		}
 		//向文件中写入数据
-		static bool Write(const std::string &name, std::string &body)
+		static bool Write(const std::string &name, std::string body)
 		{
 			//ofstream,默认打开文件时，会清空原有内容;
 			std::ofstream ofs(name, std::ios::binary);//输出文件流，以二进制打开文件
@@ -120,17 +122,115 @@ namespace m_cloud_sys
 	public:
 		DataManger(const std::string &path):
 			m_back_file(path)
-		{}
+		{
+			pthread_rwlock_init(&m_rwlock, NULL);
+		}
 		~DataManger()
-		{}
+		{
+			pthread_rwlock_destroy(&m_rwlock);
+		}
 
-		bool Exists(const std::string &name);//判断文件是否存在
-		bool IsCompress(const std::string &name);//判断文件是否已经压缩
-		bool NonCompressList(std::vector<std::string> *list);//获取未压缩文件列表
-		bool Insert(const std::string src, const std::string &std);//插入更新数据
-		bool GetAllName(std::vector<std::string> *list);//获取所有文件名称
-		bool Storage();//数据改变后持久化存储
-		bool InitLoad();//启动时初始化加载原有数据
+		bool Exists(const std::string &name)//判断文件是否存在
+		{
+			pthread_rwlock_rdlock(&m_rwlock);//加读锁
+			if(m_file_list.find(name) == m_file_list.end())
+			{
+				pthread_rwlock_unlock(&m_rwlock);
+				return false;
+			}
+			pthread_rwlock_unlock(&m_rwlock);
+			return true;
+		}
+		bool IsCompress(const std::string &name)//判断文件是否已经压缩
+		{
+			//判断文件是否存在
+			pthread_rwlock_rdlock(&m_rwlock);//加读锁
+			auto it = m_file_list.find(name);
+			if(it == m_file_list.end())
+			{
+				pthread_rwlock_unlock(&m_rwlock);
+				return false;
+			}
+			//查看是否压缩
+			if(it->first == it->second)
+			{
+				pthread_rwlock_unlock(&m_rwlock);
+				return false;
+			}
+			pthread_rwlock_unlock(&m_rwlock);
+			return true;
+
+		}
+		bool NonCompressList(std::vector<std::string> *list)//获取未压缩文件列表
+		{
+			pthread_rwlock_rdlock(&m_rwlock);//加读锁
+			for(auto it = m_file_list.begin(); it != m_file_list.end(); it++)
+			{
+				if(it->first == it->second)
+				{
+					list->push_back(it->first);
+				}
+			}
+			pthread_rwlock_unlock(&m_rwlock);
+			return true;
+		}
+		bool Insert(const std::string src, const std::string &dst)//插入更新数据
+		{	
+			pthread_rwlock_wrlock(&m_rwlock);//加写锁子
+			m_file_list[src] = dst;
+			pthread_rwlock_unlock(&m_rwlock);
+			return true;
+		}
+
+		bool GetAllName(std::vector<std::string> *list)//获取所有文件名称
+		{
+			pthread_rwlock_rdlock(&m_rwlock);
+			for(auto it = m_file_list.begin(); it != m_file_list.end(); ++it)
+			{
+				list->push_back(it->first);
+			}
+			pthread_rwlock_unlock(&m_rwlock);
+			return true;
+ 		}
+		bool Storage()//数据改变后持久化存储(对文件名)
+		{
+			std::stringstream tmp;//实例化一个string流对象
+			pthread_rwlock_rdlock(&m_rwlock);
+			for (auto it = m_file_list.begin(); it != m_file_list.end(); ++it)
+			{
+				tmp << it->first << " " << it->second << "\r\n";
+			}
+			pthread_rwlock_unlock(&m_rwlock);
+			FileUtil::Write(m_back_file,tmp.str());//写入
+			return true;	
+		}
+		bool InitLoad()//启动时初始化加载原有数据
+		{
+			//1:讲备份文件读取出来
+			std::string body;
+			if(FileUtil::Read(m_back_file, &body) == false)
+			{
+				return false;
+			}
+			//2：使用boost库，对字符串进行处理，按照\r\n进行分割
+			std::vector<std::string> list;
+			boost::split(list, body, boost::is_any_of("\r\n"), boost::token_compress_off);
+			//3:每一行按照空格进行分割
+			for(auto i: list)
+			{
+				size_t pos = i.find(" ");
+				if(pos == std::string::npos)
+				{
+					continue;
+				}
+				std::string key = i.substr(0, pos);
+				std::string val = i.substr(pos + 1);
+				//4：把key/val添加到m_file_list中
+				Insert(key, val);
+			}
+			return true;
+		}
+
 
 	private:
 		std::string m_back_file;//持久化数据存储文件名称
