@@ -318,15 +318,37 @@ namespace m_cloud_sys
 		~Server()
 		{}
 
-		bool Start();//网络通信开启接口
+		bool Start()//网络通信开启接口
+		{
+			m_server.Put("/upload", UpLoad);//往http对象中添加处理路径和方法
+			m_server.Get("/list", List);
+			m_server.Get("/download(.*)",DowanLoad);//（。*）：正则表达式：(匹配任意字符，捕捉任意字符):(防止与list混淆)
+			m_server.listen("0.0.0.0", 9000);//监听任意ip和443端口
+
+			return true;
+		}
 
 	private:
 		//文件上传处理回调函数
-		static void UpLoad(const httplib::Request &req, httplib::Response &rsp);
+		static void UpLoad(const httplib::Request &req, httplib::Response &rsp)
+		{
+			rsp.status = 200;
+			rsp.set_content("upload", 6, "text/html");
+		}
+		
 		//文件列表处理回调函数
-		static void List(const httplib::Request &req, httplib::Request &rsp);
+		static void List(const httplib::Request &req, httplib::Response &rsp)
+		{
+			rsp.status = 200;
+			rsp.set_content("list", 4, "text/html");//正文数据，正文数据长度，正文类型
+		}
 		//文件下载处理回调函数
-		static void DowanLoad(const httplib::Request &req, httplib::Response &rsp);
+		static void DowanLoad(const httplib::Request &req, httplib::Response &rsp)
+		{
+			rsp.status = 200;
+			std::string path = req.matches[1];//正则表达式捕捉的字符串//[0]为整体字符串
+			rsp.set_content(path.c_str(), path.size(), "text/html");
+		}
 
 	private:
 		std::string m_file_dir;//文件上传辈份路径
