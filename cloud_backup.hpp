@@ -131,6 +131,7 @@ namespace m_cloud_sys
 			m_back_file(path)
 		{
 			pthread_rwlock_init(&m_rwlock, NULL);
+			InitLoad();
 		}
 
 		~DataManger()
@@ -140,15 +141,23 @@ namespace m_cloud_sys
 
 		bool Exists(const std::string &name)//判断文件是否存在
 		{
+			std::cout << "判断文件是否存在" << std::endl;
 			pthread_rwlock_rdlock(&m_rwlock);//加读锁
+			for(auto e: m_file_list)
+			{
+				std::cout << e.first << " ";
+			}
+			std::cout << std::endl;
 			if(m_file_list.find(name) == m_file_list.end())
 			{
 				pthread_rwlock_unlock(&m_rwlock);
+				std::cout << "----文件不存在----" << std::endl;
 				return false;
 			}
 			pthread_rwlock_unlock(&m_rwlock);
 			return true;
 		}
+
 		bool IsCompress(const std::string &name)//判断文件是否已经压缩
 		{
 			//判断文件是否存在
@@ -171,6 +180,7 @@ namespace m_cloud_sys
 		}
 		bool NonCompressList(std::vector<std::string> *list)//获取未压缩文件列表
 		{
+			std::cout << "获取压缩文件列表" << std::endl;
 			pthread_rwlock_rdlock(&m_rwlock);//加读锁
 			for(auto it = m_file_list.begin(); it != m_file_list.end(); it++)
 			{
@@ -184,15 +194,29 @@ namespace m_cloud_sys
 		}
 		bool Insert(const std::string src, const std::string &dst)//插入更新数据
 		{	
-			pthread_rwlock_wrlock(&m_rwlock);//加写锁子
+			std::cout << "插入数据" << std::endl;
+			pthread_rwlock_wrlock(&m_rwlock);//加写锁
 			m_file_list[src] = dst;
 			pthread_rwlock_unlock(&m_rwlock);
 			Storage();//保存
 			return true;
 		}
 
+		//根据源文件获取压缩包名称
+		bool GetGzName(const std::string &src, std::string *dst)
+		{
+			auto it = m_file_list.find(src);
+			if(it == m_file_list.end())
+			{
+				return false;
+			}
+			*dst = it->second;
+			return true;
+		}
+
 		bool GetAllName(std::vector<std::string> *list)//获取所有文件名称
 		{
+			std::cout << "获取所有文件名称" << std::endl;
 			pthread_rwlock_rdlock(&m_rwlock);
 			for(auto it = m_file_list.begin(); it != m_file_list.end(); ++it)
 			{
@@ -203,6 +227,7 @@ namespace m_cloud_sys
  		}
 		bool Storage()//数据改变后持久化存储(对文件名)
 		{
+			std::cout << "持久化存储" << std::endl;
 			std::stringstream tmp;//实例化一个string流对象
 			pthread_rwlock_rdlock(&m_rwlock);
 			for (auto it = m_file_list.begin(); it != m_file_list.end(); ++it)
@@ -215,6 +240,7 @@ namespace m_cloud_sys
 		}
 		bool InitLoad()//启动时初始化加载原有数据
 		{
+			std::cout << "初始化数据" << std::endl;
 			//1:讲备份文件读取出来
 			std::string body;
 			if(FileUtil::Read(m_back_file, &body) == false)
@@ -223,6 +249,7 @@ namespace m_cloud_sys
 			}
 			//2：使用boost库，对字符串进行处理，按照\r\n进行分割
 			std::vector<std::string> list;
+
 			boost::split(list, body, boost::is_any_of("\r\n"), boost::token_compress_off);
 			//3:每一行按照空格进行分割
 			for(auto i: list)
@@ -292,6 +319,7 @@ namespace m_cloud_sys
 	private:
 		bool FileIsHot(const std::string &name)//判断一个文件是否是一个热点文件
 		{
+			std::cout << "查看是否为热店文件" << std::endl;
 			time_t cur_t = time(NULL);//获取当前时间
 			struct stat st;//文件信息结构体
 			if(stat(name.c_str(), &st) < 0)//文件状态获取失败
@@ -320,7 +348,7 @@ namespace m_cloud_sys
 
 		bool Start()//网络通信开启接口
 		{
-			m_server.Put("/upload", UpLoad);//往http对象中添加处理路径和方法
+			m_server.Put("/(.*)", UpLoad);//往http对象中添加处理路径和方法
 			m_server.Get("/list", List);
 			m_server.Get("/download(.*)",DowanLoad);//（。*）：正则表达式：(匹配任意字符，捕捉任意字符):(防止与list混淆)
 			m_server.listen("0.0.0.0", 9000);//监听任意ip和443端口
@@ -332,22 +360,65 @@ namespace m_cloud_sys
 		//文件上传处理回调函数
 		static void UpLoad(const httplib::Request &req, httplib::Response &rsp)
 		{
+			//matches：获取头部信息；
+			std::cout << "---上传文件---" << std::endl;
+			std::string filename = req.matches[1];//文件名
+			std::string pathname = BACKUP_DIR + filename;//路径
+			FileUtil::Write(pathname, req.body);//向文件写入数据
+			data_manger.Insert(filename, filename);//添加文件信息到数据管理中
 			rsp.status = 200;
-			rsp.set_content("upload", 6, "text/html");
+			return;
 		}
 		
 		//文件列表处理回调函数
 		static void List(const httplib::Request &req, httplib::Response &rsp)
 		{
+			std::cout << "---获取文件列表---" << std::endl;
+		    //1:获取文件列表
+			std::vector<std::string> list;
+			data_manger.GetAllName(&list);
+			//2：组织响应的html信息
+			std::stringstream tmp;
+			tmp << "<html><body><hr />";
+			for(int i = 0; i < list.size(); i++)
+			{
+				tmp << "<a href='/download" << list[i] << "'>" << list[i] << "</a>";
+				tmp << "<hr />";
+			}
+			tmp << "<hr /></body></html>";
+			//3:填充rsp的正文信息和状态码			
 			rsp.status = 200;
-			rsp.set_content("list", 4, "text/html");//正文数据，正文数据长度，正文类型
+			rsp.set_content(tmp.str().c_str(), tmp.str().size(), "text/html");//正文数据，正文数据长度，正文类型
+			return;
 		}
 		//文件下载处理回调函数
 		static void DowanLoad(const httplib::Request &req, httplib::Response &rsp)
-		{
+		{ 
+			std::string filename = req.matches[1];
+			std::cout <<"--------下载" << filename << "--------\n";
+			if(true != data_manger.Exists(filename))//文件若不存在
+			{
+				std::cout << 1 << std::endl; 
+				rsp.status = 404;
+				return;
+			}
+			std::string pathname = BACKUP_DIR + filename;//源文件路径
+			if(data_manger.IsCompress(filename))//若文件被压缩，先解压
+			{
+				std::cout << 2 << std::endl; 
+				std::string gzfile;
+				data_manger.GetGzName(filename, &gzfile);//获得压缩包名称
+				std::string gzpathname = GZFILE_DIR + gzfile;//压缩包路径
+				CompressUtil::UnCompress(gzpathname, pathname.c_str());//解压
+				unlink(gzpathname.c_str());//删除压缩包
+				data_manger.Insert(filename, filename);//更新数据包
+			}
+			//从文件中读取数据，相应给客户端
+			std::cout << 3 << std::endl; 
+			FileUtil::Read(pathname, &rsp.body);
+			rsp.set_header("Content-Type", "application/octet-stream");//二进制流下载类型
 			rsp.status = 200;
-			std::string path = req.matches[1];//正则表达式捕捉的字符串//[0]为整体字符串
-			rsp.set_content(path.c_str(), path.size(), "text/html");
+			return ;
 		}
 
 	private:
