@@ -6,5 +6,5 @@ The server provides non hot compression of files, browser browsing and downloadi
 
 Technology realization：
 server: The server uses boost library and HTTP library, uses read-write lock to realize safe multithreading, uses zip library to compress 
-files in non hot store, and unordered map data structure to provide efficient data management
-client: The client uses the boost library to check the Etag value of the file, so as to realize the automatic backup of the file;
+files in non hot store, and unordered map data structure to provide efficient data management.
+client: The client uses the boost library to check the Etag value of the file, so as to realize the automatic backup of the file.
